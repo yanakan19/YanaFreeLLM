@@ -1,0 +1,25 @@
+# Fly.io config for this app itself.
+# Run from the repo root (needs the Dockerfile there):
+#   flyctl launch --config deploy/fly/app.fly.toml --no-deploy
+#   flyctl secrets set FREELLMAPI_BASE_URL=https://<freellmapi-app>.fly.dev FREELLMAPI_API_KEY=<unified-key> --app <this-app-name>
+#   flyctl deploy --config deploy/fly/app.fly.toml --app <this-app-name>
+
+app = ""
+primary_region = "lhr"
+
+[build]
+
+[env]
+  PORT = "4000"
+
+[http_service]
+  internal_port = 4000
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+[[vm]]
+  memory = "512mb"
+  cpu_kind = "shared"
+  cpus = 1

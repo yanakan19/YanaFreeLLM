@@ -1,0 +1,9 @@
+{
+  "_comment": "Model ids your FreeLLMAPI router serves. Check GET {FREELLMAPI_BASE_URL}/v1/models on YOUR running instance (with your unified key in the Authorization header) and replace these. Up to 28 entries; fewer is fine.",
+  "models": [
+    "gemini-2.5-flash",
+    "llama-3.3-70b",
+    "mistral-large-latest",
+    "command-r-plus"
+  ]
+}

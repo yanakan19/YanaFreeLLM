@@ -1,0 +1,39 @@
+# Fly.io config for FreeLLMAPI (the router), using the official published
+# image directly — no need to clone/build its source.
+#
+# Usage:
+#   flyctl launch --config deploy/fly/freellmapi.fly.toml --no-deploy
+#   flyctl volumes create freellmapi_data --size 1 --app <the-app-name-it-picks>
+#   flyctl secrets set ENCRYPTION_KEY=<generated> --app <app-name>
+#   flyctl deploy --config deploy/fly/freellmapi.fly.toml --app <app-name>
+#
+# Generate an encryption key (PowerShell):
+#   $Bytes = New-Object Byte[] 32
+#   [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($Bytes)
+#   -join ($Bytes | ForEach-Object { "{0:x2}" -f $_ })
+
+app = ""
+primary_region = "lhr"
+
+[build]
+  image = "ghcr.io/tashfeenahmed/freellmapi:latest"
+
+[env]
+  PORT = "3001"
+  NODE_ENV = "production"
+
+[mounts]
+  source = "freellmapi_data"
+  destination = "/app/server/data"
+
+[http_service]
+  internal_port = 3001
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = true
+  min_machines_running = 1
+
+[[vm]]
+  memory = "512mb"
+  cpu_kind = "shared"
+  cpus = 1
