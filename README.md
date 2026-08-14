@@ -41,8 +41,27 @@ of it:
    the answer trace back to the injected context?) without touching the
    rest.
 4. **Adjust `server/config/agents.json`** to the model ids your own
-   FreeLLMAPI instance actually serves (check `GET /v1/models` with your
-   unified key).
+   FreeLLMAPI instance actually serves. Don't hand-copy them from a
+   `curl /v1/models` any more — run the generator:
+   ```bash
+   npm run generate-agents              # writes server/config/agents.json
+   npm run generate-agents -- --dry-run # print the plan, write nothing
+   npm run generate-agents -- --max=12  # cap the panel (default 28)
+   ```
+   It reads `FREELLMAPI_BASE_URL`/`FREELLMAPI_API_KEY` from `.env`, calls
+   `GET /v1/models` with your unified key, keeps only `available: true`
+   models, drops the virtual `auto`/`fusion` pseudo-models, and then picks a
+   **diverse** panel: it round-robins across `owned_by` providers so every
+   provider is used once before any is used twice, and within a provider
+   alternates between the largest and smallest context windows so the council
+   isn't 28 near-identical models. The cap comes from `--max=N`, a bare
+   numeric arg, or `MAX_AGENTS` in env.
+
+   If the router is unreachable or returns nothing usable, it prints the
+   error and exits non-zero **without touching the committed
+   `agents.json`**. `npm test` runs the script's built-in fixture self-test
+   (`node scripts/generate-agents.mjs --self-test`), which verifies the
+   parsing, filtering and diversity logic with no live router.
 5. Restyle `public/` to match whatever product this powers.
 
 The perfume-specific version of all this (price lookups, notes-based
@@ -66,8 +85,13 @@ worked example of steps 1-3 above, if you want to see it applied.
    npm install
    ```
 
-3. Edit `server/config/agents.json` to list model ids your instance
-   actually has enabled (check `/v1/models`).
+3. Populate `server/config/agents.json` with the model ids your instance
+   actually has enabled:
+   ```bash
+   npm run generate-agents
+   ```
+   See "Adjust `server/config/agents.json`" above for the flags and the
+   selection rules; hand-editing the file still works.
 
 4. Run it:
    ```bash
