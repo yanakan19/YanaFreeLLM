@@ -9,13 +9,18 @@
     "start": "node server/index.js",
     "dev": "node --watch server/index.js",
     "generate-agents": "node scripts/generate-agents.mjs",
-    "test": "node scripts/generate-agents.mjs --self-test"
+    "test": "node scripts/generate-agents.mjs --self-test && vitest run",
+    "test:unit": "vitest run",
+    "test:watch": "vitest"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
-    "express": "^4.19.2",
-    "dotenv": "^16.4.5"
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.10"
   }
 }

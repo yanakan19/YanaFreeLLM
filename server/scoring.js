@@ -7,7 +7,7 @@
 // If your application has a "must be grounded in X data" requirement, add a
 // `groundedness` criterion in your own copy of this file (see README).
 
-const CRITERIA = [
+export const CRITERIA = [
   {
     key: 'relevance',
     weight: 0.34,
