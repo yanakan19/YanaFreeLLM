@@ -18,8 +18,18 @@ const RATE_LIMIT_MAX = Number(process.env.RATE_LIMIT_MAX) || 10;
 
 const chatLimiter = createRateLimiter({ windowMs: RATE_LIMIT_WINDOW_MS, max: RATE_LIMIT_MAX });
 
+// Behind a proxy (the Fly configs in deploy/fly put one in front), req.ip is
+// the proxy's address unless Express is told to trust it — which would make
+// the per-IP rate limit a single global bucket. Off by default, because
+// trusting X-Forwarded-For when nothing sets it lets a client spoof its IP.
+// Set TRUST_PROXY=1 (hops), or a value express accepts ("loopback", a CIDR).
+const TRUST_PROXY = process.env.TRUST_PROXY;
+
 const app = express();
 app.disable('x-powered-by');
+if (TRUST_PROXY) {
+  app.set('trust proxy', /^\d+$/.test(TRUST_PROXY) ? Number(TRUST_PROXY) : TRUST_PROXY);
+}
 app.use(express.json({ limit: JSON_BODY_LIMIT }));
 
 // express.json() throws on malformed/oversized bodies; without this handler
@@ -199,9 +209,29 @@ app.use((err, req, res, next) => {
 
 // Skip listening when imported by tests.
 if (process.env.NODE_ENV !== 'test') {
-  app.listen(PORT, () => {
+  const server = app.listen(PORT, () => {
     console.log(`llm-council listening on http://localhost:${PORT}`);
   });
+
+  // Platforms like Fly send SIGTERM on deploy/scale-down. Stop accepting new
+  // connections, let in-flight council runs finish, and only hard-exit if
+  // something is still hanging well past that.
+  const shutdown = (signal) => {
+    console.log(`[server] ${signal} received — shutting down`);
+    const force = setTimeout(() => {
+      console.error('[server] forced exit after shutdown timeout');
+      process.exit(1);
+    }, 30_000);
+    force.unref();
+    // Idle keep-alive sockets would otherwise hold close() open.
+    server.closeIdleConnections?.();
+    server.close(() => {
+      clearTimeout(force);
+      process.exit(0);
+    });
+  };
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
 export { app };

@@ -125,8 +125,16 @@ The rate limiter (`server/rateLimit.js`) is a deliberately tiny in-memory
 fixed-window counter: it exists to stop one client looping a question into
 28 upstream free-tier calls, not to be a production edge limiter. It is
 per-process and resets on restart — if you ever run more than one instance,
-put a real limiter in front of it. If the app runs behind a proxy, set
-`app.set('trust proxy', …)` so `req.ip` is the real client IP.
+put a real limiter in front of it. If the app runs behind a proxy or
+platform router (the Fly configs in `deploy/fly` do), set `TRUST_PROXY=1`
+so `req.ip` is the real client IP rather than the proxy's — otherwise every
+client shares one bucket. Leave it unset when the app is directly exposed:
+trusting `X-Forwarded-For` when nothing sets it lets a client spoof its IP
+past the limiter.
+
+The server also shuts down gracefully on `SIGTERM`/`SIGINT`: it stops
+accepting connections, lets in-flight council runs finish, and hard-exits
+after 30s if something is still hanging.
 
 ### Agent failure codes
 
