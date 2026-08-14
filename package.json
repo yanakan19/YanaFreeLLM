@@ -2,6 +2,7 @@
   "name": "yana-free-llm",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "description": "Reusable multi-agent LLM council: fan a question out to up to 28 free models via a self-hosted FreeLLMAPI router, score every answer anonymously with a weighted matrix, return the best one. No domain-specific code — adapt council.js's system prompt per project.",
   "type": "module",
   "main": "server/index.js",
