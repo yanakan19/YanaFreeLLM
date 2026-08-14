@@ -652,6 +652,14 @@ restart can actually fix. Router reachability and configuration are reported by
 `/api/health` instead, which is for a human or a readiness gate to read, not
 for a supervisor to react to.
 
+Neither file in `deploy/fly/` declares a health check, so on Fly nothing polls
+either endpoint and `/api/health`'s 503 cannot restart-loop a deployed app. The
+Docker `HEALTHCHECK` is currently the only automated consumer. That is safe as
+it stands but load-bearing: if you later add an `[[http_service.checks]]` block,
+point it at `/api/live`. Pointing a Fly check at `/api/health` would make an
+unconfigured or router-down app restart forever, which is the exact failure
+mode the split exists to prevent.
+
 Wiring between the two apps is by public URL, not Fly private networking:
 `FREELLMAPI_BASE_URL=https://<router-app>.fly.dev` plus the unified
 `FREELLMAPI_API_KEY`, both set as Fly secrets. Traffic between the app and the
