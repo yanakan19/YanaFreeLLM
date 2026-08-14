@@ -151,3 +151,4 @@ body {
   cursor: pointer;
 }
 .composer button:disabled { opacity: 0.5; cursor: default; }
+.composer input:disabled { opacity: 0.6; cursor: default; }

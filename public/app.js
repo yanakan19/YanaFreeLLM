@@ -1,6 +1,19 @@
 const thread = document.getElementById('thread');
 const composer = document.getElementById('composer');
 const input = document.getElementById('input');
+const sendButton = composer.querySelector('button[type="submit"]');
+
+// A council run is one fan-out to every agent, so let only one be in flight
+// at a time — otherwise an impatient double-click burns free-tier quota and
+// trips the server's rate limit.
+let busy = false;
+
+function setBusy(next) {
+  busy = next;
+  input.disabled = next;
+  sendButton.disabled = next;
+  if (!next) input.focus();
+}
 
 function addMessage(text, who) {
   const el = document.createElement('div');
@@ -68,11 +81,19 @@ function escapeAttr(s) {
 
 composer.addEventListener('submit', async (e) => {
   e.preventDefault();
+  if (busy) return;
   const message = input.value.trim();
   if (!message) return;
   input.value = '';
   addMessage(message, 'user');
-  await runChat(message);
+  setBusy(true);
+  try {
+    await runChat(message);
+  } catch (err) {
+    addMessage(`Couldn't reach the council: ${err?.message ?? err}`, 'bot');
+  } finally {
+    setBusy(false);
+  }
 });
 
 async function runChat(message) {
@@ -87,7 +108,12 @@ async function runChat(message) {
 
   if (!res.ok || !res.body) {
     const body = await res.json().catch(() => ({}));
-    splash.querySelector('.txt').textContent = body.message || 'Something went wrong.';
+    const retryAfter = res.headers.get('Retry-After');
+    const detail =
+      res.status === 429 && retryAfter
+        ? `Too many questions at once — try again in ${retryAfter}s.`
+        : body.message;
+    splash.querySelector('.txt').textContent = detail || `Something went wrong (HTTP ${res.status}).`;
     splash.querySelector('.spinner').style.display = 'none';
     return;
   }
@@ -147,4 +173,5 @@ fetch('/api/config').then((r) => r.json()).then((cfg) => {
   } else {
     addMessage(`Council of ${cfg.agentCount} agents is ready. Ask anything.`, 'bot');
   }
+  if (cfg.maxMessageChars) input.maxLength = cfg.maxMessageChars;
 }).catch(() => {});
