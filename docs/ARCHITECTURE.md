@@ -538,9 +538,11 @@ To be unambiguous about the boundaries:
   can still deplete the pool for every app on the router.
 - **No SSE heartbeat.** During the fan-out the stream can be silent for the
   full 25 s. Intermediaries with short idle timeouts may cut it.
-- **No client-disconnect handling.** Nothing listens for `req.on('close')`;
-  aborting the browser tab does not cancel the in-flight provider calls. The
-  quota is spent regardless.
+- **No cancellation of in-flight provider calls.** `req.on('close')` is now
+  handled, so once the client goes away the server stops writing SSE frames.
+  But the fan-out itself is not aborted — closing the browser tab does not
+  cancel the ~28 upstream requests, and the quota is spent regardless.
+  Cancelling would mean threading an `AbortSignal` through `runCouncil`.
 - **No end-to-end coverage.** Unit tests exist (`tests/`, run by `vitest` via
   `npm test`, alongside the generator's `--self-test` fixtures) and
   `.github/workflows/ci.yml` runs them on Node 20 and 22. Nothing exercises
@@ -623,13 +625,20 @@ Two operational implications of a volume-backed app on Fly:
   cpus = 1
 ```
 
-Built from the repo-root `Dockerfile`: `node:20-slim`, `npm install
---omit=dev`, `COPY . .`, `CMD ["node", "server/index.js"]`. `EXPOSE 4000`
-matches `internal_port`. Note the Dockerfile has no `.dockerignore`-driven
-discipline visible here and copies the whole tree after installing
-dependencies, so `node_modules` from the build context can be copied over the
-installed ones — worth cleaning up if image size or reproducibility becomes a
-concern.
+Built from the repo-root `Dockerfile`: `node:20-slim`, `NODE_ENV=production`,
+`npm ci --omit=dev` against the committed lockfile, then `COPY server public
+scripts` only — never `COPY . .` — with a `.dockerignore` excluding `.env*`
+(bar the example), keys, and `node_modules`. A local env file therefore cannot
+be baked into the image, and the build context cannot overwrite the installed
+dependencies. The image runs as the unprivileged `node` user. `EXPOSE 4000`
+matches `internal_port`, and `CMD ["node", "server/index.js"]`.
+
+The image also declares a `HEALTHCHECK` against `/api/health`. Read the note at
+the end of §4 before trusting it: that endpoint only checks that the env vars
+are set and `agents.json` is non-empty, so it confirms the container is up and
+configured — it does **not** confirm the router is reachable. A container whose
+router is completely down still reports healthy, and Docker will not restart
+it.
 
 Wiring between the two apps is by public URL, not Fly private networking:
 `FREELLMAPI_BASE_URL=https://<router-app>.fly.dev` plus the unified
@@ -872,8 +881,8 @@ no build step, no framework, no npm frontend dependency.
   requires server-side inspection, and there is nothing to inspect: no logs,
   no metrics, no traces, no alerting.
 - **Request-level protection is partial.** A per-IP rate limit and a message
-  size cap exist, but there is still no auth and no client-disconnect
-  cancellation on an endpoint that spends a shared, exhaustible resource.
+  size cap exist, but there is still no auth, and a disconnecting client stops
+  the stream without cancelling the upstream fan-out it already paid for.
 - **Testing stops at the unit boundary.** `scoring.js`, `council.js`, the rate
   limiter, and request validation have unit tests, run in CI on Node 20 and 22.
   Nothing covers the HTTP/SSE layer or a real fan-out, so a regression in
