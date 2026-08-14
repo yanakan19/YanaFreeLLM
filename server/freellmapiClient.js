@@ -1,5 +1,9 @@
 const TIMEOUT_MS = (Number(process.env.AGENT_TIMEOUT_SECONDS) || 25) * 1000;
 
+// A health probe must fail fast: a hung router should turn the check red in
+// seconds, not hold the request open for the full chat timeout above.
+export const ROUTER_PROBE_TIMEOUT_MS = Number(process.env.ROUTER_PROBE_TIMEOUT_MS) || 4000;
+
 /**
  * Stable machine-readable failure codes. `error` stays a human string for
  * backward compatibility; `errorCode` is what callers should branch on.
@@ -133,6 +137,55 @@ export async function callAgentModel({ baseUrl, apiKey, model, messages }) {
       error,
       errorCode,
       retryable: isRetryable(errorCode),
+      ...(httpStatus === undefined ? {} : { httpStatus }),
+      latencyMs: Date.now() - startedAt,
+    };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Cheapest real proof that the router is up and our key is accepted:
+ * GET /v1/models. It is a catalog listing, not an inference call, so it
+ * spends no model quota — unlike callAgentModel, which is why this is a
+ * separate function rather than a reuse of it. Same error taxonomy, same
+ * abort-with-timeout shape as callAgentModel, just a shorter deadline.
+ *
+ * Never throws. Returns { reachable, latencyMs } plus, on failure,
+ * { error, errorCode, httpStatus? }.
+ */
+export async function probeRouter({ baseUrl, apiKey, timeoutMs = ROUTER_PROBE_TIMEOUT_MS }) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const startedAt = Date.now();
+  let httpStatus;
+
+  try {
+    const res = await fetch(`${baseUrl.replace(/\/$/, '')}/v1/models`, {
+      method: 'GET',
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: controller.signal,
+    });
+    httpStatus = res.status;
+    if (!res.ok) {
+      const body = await res.text().catch(() => '');
+      throw tagged(classifyHttpStatus(res.status), `HTTP ${res.status}: ${body.slice(0, 200)}`);
+    }
+    // A 2xx from /v1/models is enough. We deliberately do not parse or
+    // validate the catalog: the question is "did the router answer us",
+    // and a body-shape change upstream must not read as an outage.
+    return { reachable: true, httpStatus, latencyMs: Date.now() - startedAt };
+  } catch (err) {
+    const errorCode = classifyThrownError(err);
+    const error =
+      errorCode === ErrorCodes.TIMEOUT && err?.name === 'AbortError'
+        ? `router did not respond within ${timeoutMs}ms`
+        : String(err?.message ?? err);
+    return {
+      reachable: false,
+      error,
+      errorCode,
       ...(httpStatus === undefined ? {} : { httpStatus }),
       latencyMs: Date.now() - startedAt,
     };

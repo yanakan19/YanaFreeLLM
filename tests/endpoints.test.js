@@ -34,13 +34,18 @@ describe('GET /api/live', () => {
 });
 
 describe('GET /api/health', () => {
-  it('reports configuration readiness', async () => {
+  // No router env vars are set in the test process, so readiness is expected
+  // to be false here — the point is that it says so instead of claiming ok.
+  it('reports readiness, including real router reachability', async () => {
     const res = await fetch(`${base}/api/health`);
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(503);
     const body = await res.json();
-    expect(typeof body.ok).toBe('boolean');
+    expect(body.ok).toBe(false);
     expect(typeof body.configured).toBe('boolean');
     expect(typeof body.agentCount).toBe('number');
+    expect(body.routerReachable).toBe(false);
+    expect(typeof body.routerCheckedAt).toBe('string');
+    expect(body.routerErrorCode).toBe('not_configured');
   });
 });
 

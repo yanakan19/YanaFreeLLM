@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { readFile } from 'node:fs/promises';
 import { runCouncil } from './council.js';
 import { createRateLimiter } from './rateLimit.js';
+import { probeRouter } from './freellmapiClient.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT) || 4000;
@@ -64,6 +65,59 @@ function isConfigured() {
   return Boolean(process.env.FREELLMAPI_BASE_URL && process.env.FREELLMAPI_API_KEY);
 }
 
+// How long a real router probe is reused before we spend another one.
+// The router is a SHARED resource — every app pointed at it draws on the same
+// provider quota and rate-limit budget — and uptime monitors poll /api/health
+// every 30s–5min, per monitor. Without this cache, monitoring alone would be a
+// steady background load on the router. Tune here, not inline.
+export const ROUTER_HEALTH_TTL_MS = Number(process.env.ROUTER_HEALTH_TTL_MS) || 45_000;
+
+let routerHealthCache = null; // { key, checkedAt, reachable, error?, errorCode?, latencyMs? }
+let routerProbeInFlight = null;
+
+/** Test seam: drop the memoised probe result. */
+export function resetRouterHealthCache() {
+  routerHealthCache = null;
+  routerProbeInFlight = null;
+}
+
+/**
+ * Real router reachability, memoised for ROUTER_HEALTH_TTL_MS. Concurrent
+ * callers share one in-flight probe, so a burst of health checks is still at
+ * most one request to the router.
+ */
+async function checkRouterCached(now = Date.now()) {
+  const baseUrl = process.env.FREELLMAPI_BASE_URL;
+  const apiKey = process.env.FREELLMAPI_API_KEY;
+  // Key on the target so a reconfigured router isn't judged by a stale probe.
+  const key = `${baseUrl ?? ''}|${apiKey ? 'set' : 'unset'}`;
+
+  if (!baseUrl || !apiKey) {
+    return {
+      reachable: false,
+      checkedAt: now,
+      error: 'FREELLMAPI_BASE_URL / FREELLMAPI_API_KEY are not set, so the router was not contacted.',
+      errorCode: 'not_configured',
+    };
+  }
+
+  if (routerHealthCache && routerHealthCache.key === key && now - routerHealthCache.checkedAt < ROUTER_HEALTH_TTL_MS) {
+    return routerHealthCache;
+  }
+  if (routerProbeInFlight) return routerProbeInFlight;
+
+  routerProbeInFlight = probeRouter({ baseUrl, apiKey })
+    .then((result) => {
+      routerHealthCache = { ...result, key, checkedAt: Date.now() };
+      return routerHealthCache;
+    })
+    .finally(() => {
+      routerProbeInFlight = null;
+    });
+
+  return routerProbeInFlight;
+}
+
 /** Wraps an async handler so a rejection becomes a clean 500, never a hang. */
 function asyncRoute(handler) {
   return (req, res, next) => {
@@ -80,16 +134,26 @@ app.get('/api/live', (req, res) => {
   res.json({ ok: true, uptimeSeconds: Math.round(process.uptime()) });
 });
 
-// Readiness/config check, NOT a health check: it reports whether the router
-// env vars are set and agents.json is non-empty. It never contacts the
-// router, so it stays `ok: true` while the router is down. Don't wire it to
-// anything that reacts automatically to a false — see docs/ARCHITECTURE.md.
+// Readiness: config is present AND the router actually answered. Unlike
+// /api/live this can fail for reasons a restart cannot fix, which is exactly
+// why the Docker HEALTHCHECK points at /api/live instead — see the note there.
 app.get(
   '/api/health',
   asyncRoute(async (req, res) => {
     const models = await loadAgentModels();
     const configured = isConfigured();
-    res.json({ ok: configured && models.length > 0, agentCount: models.length, configured });
+    const router = await checkRouterCached();
+    const ok = configured && models.length > 0 && router.reachable === true;
+
+    res.status(ok ? 200 : 503).json({
+      ok,
+      configured,
+      agentCount: models.length,
+      routerReachable: router.reachable,
+      routerCheckedAt: new Date(router.checkedAt).toISOString(),
+      ...(router.latencyMs === undefined ? {} : { routerLatencyMs: router.latencyMs }),
+      ...(router.error ? { routerError: router.error, routerErrorCode: router.errorCode } : {}),
+    });
   }),
 );
 
