@@ -185,6 +185,18 @@ Consequences that follow directly from that shape:
   calls a minute rather than an unbounded loop. There is still no dedupe and no
   request coalescing, and the limiter is in-memory and per process, so it
   resets on restart and does not hold across multiple instances.
+
+  "Per client IP" depends on the app knowing the client's address. Behind a
+  proxy that terminates the connection — Fly's, in the shipped topology —
+  `req.ip` is the *proxy's* address unless `TRUST_PROXY` is set, so every user
+  collapses into one bucket and ten requests a minute becomes a global cap that
+  one visitor can exhaust for everyone. `TRUST_PROXY` is unset by default
+  because the opposite error is worse: trusting `X-Forwarded-For` from anyone
+  lets a client rotate a fake header and evade the limiter entirely.
+  `server/clientIp.js` resolves this, and on Fly the correct value is
+  `TRUST_PROXY=2` — Fly appends both the real client and the app's own anycast
+  address, and express counts hops from the right. Both failure modes are
+  silent, which is why the resolver is its own tested module.
 - **The blast radius of a revoked key is shared.** Revoking or exhausting one
   provider key degrades every app at once.
 - **Adding an app is free in code and not free in quota.** Pointing a fourth
