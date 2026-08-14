@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { readFile } from 'node:fs/promises';
 import { runCouncil } from './council.js';
 import { createRateLimiter } from './rateLimit.js';
+import { resolveTrustProxy, resolveClientIpHeader, resolveClientIp } from './clientIp.js';
 import { probeRouter } from './freellmapiClient.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -20,17 +21,27 @@ const RATE_LIMIT_MAX = Number(process.env.RATE_LIMIT_MAX) || 10;
 const chatLimiter = createRateLimiter({ windowMs: RATE_LIMIT_WINDOW_MS, max: RATE_LIMIT_MAX });
 
 // Behind a proxy (the Fly configs in deploy/fly put one in front), req.ip is
-// the proxy's address unless Express is told to trust it — which would make
-// the per-IP rate limit a single global bucket. Off by default, because
-// trusting X-Forwarded-For when nothing sets it lets a client spoof its IP.
-// Set TRUST_PROXY=1 (hops), or a value express accepts ("loopback", a CIDR).
-const TRUST_PROXY = process.env.TRUST_PROXY;
+// the proxy's address unless express is told to trust it — which would collapse
+// the per-IP rate limit into a single global bucket shared by every user. Off
+// by default, because trusting X-Forwarded-For when nothing in front of us
+// rewrites it lets a client spoof its IP straight past the limiter.
+//
+// On Fly.io set TRUST_PROXY=2. Fly's proxy appends *two* entries — the real
+// client and the app's own anycast address — so X-Forwarded-For ends
+// "..., <client>, <fly-app-ip>", and only a two-hop walk in from the right
+// lands on the client. Whatever a client prepended stays out of reach.
+// See resolveTrustProxy for the full set of accepted values.
+const TRUST_PROXY = resolveTrustProxy(process.env.TRUST_PROXY);
+
+// Belt and braces on top of the hop count: a header the platform overwrites on
+// every request (Fly.io's is Fly-Client-IP) cannot be seeded by the client at
+// all, so with it set the hop count stops being load-bearing. Only consulted
+// when TRUST_PROXY is set — see resolveClientIp.
+const CLIENT_IP_HEADER = resolveClientIpHeader(process.env.CLIENT_IP_HEADER);
 
 const app = express();
 app.disable('x-powered-by');
-if (TRUST_PROXY) {
-  app.set('trust proxy', /^\d+$/.test(TRUST_PROXY) ? Number(TRUST_PROXY) : TRUST_PROXY);
-}
+app.set('trust proxy', TRUST_PROXY);
 app.use(express.json({ limit: JSON_BODY_LIMIT }));
 
 // express.json() throws on malformed/oversized bodies; without this handler
@@ -209,7 +220,7 @@ app.post(
       return res.status(validated.error.status).json(validated.error.body);
     }
 
-    const limit = chatLimiter.hit(req.ip || 'unknown');
+    const limit = chatLimiter.hit(resolveClientIp(req, { trustProxy: TRUST_PROXY, clientIpHeader: CLIENT_IP_HEADER }));
     res.setHeader('X-RateLimit-Limit', String(RATE_LIMIT_MAX));
     res.setHeader('X-RateLimit-Remaining', String(limit.remaining));
     if (!limit.allowed) {

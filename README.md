@@ -126,12 +126,46 @@ The rate limiter (`server/rateLimit.js`) is a deliberately tiny in-memory
 fixed-window counter: it exists to stop one client looping a question into
 28 upstream free-tier calls, not to be a production edge limiter. It is
 per-process and resets on restart — if you ever run more than one instance,
-put a real limiter in front of it. If the app runs behind a proxy or
-platform router (the Fly configs in `deploy/fly` do), set `TRUST_PROXY=1`
-so `req.ip` is the real client IP rather than the proxy's — otherwise every
-client shares one bucket. Leave it unset when the app is directly exposed:
-trusting `X-Forwarded-For` when nothing sets it lets a client spoof its IP
-past the limiter.
+put a real limiter in front of it.
+
+#### Identifying the client behind a proxy
+
+The limiter keys on one client identity per request, and there are two ways
+to get that wrong. Trust nothing while running behind a proxy and every
+request looks like it came from the proxy, so all users share a single
+bucket. Trust everything and any client can rotate a fake `X-Forwarded-For`
+and never be limited at all. Two env vars pick the middle path:
+
+| Var | Local dev | On Fly.io |
+| --- | --- | --- |
+| `TRUST_PROXY` | leave unset | `2` |
+| `CLIENT_IP_HEADER` | leave unset | `Fly-Client-IP` |
+
+**Local dev — leave both unset.** Nothing sits in front of the process, so
+no forwarding header is trustworthy; the limiter keys on the address that
+actually opened the socket and ignores headers entirely.
+
+**On Fly.io — `TRUST_PROXY=2`.** Fly's proxy appends *two* entries to
+`X-Forwarded-For`: the real client, then the app's own shared/dedicated
+anycast address. So the header ends `..., <client>, <fly-app-ip>` and
+anything the client sent itself is left in front of that. Express walks in
+from the right by the configured hop count, so `2` lands on the client and
+`1` would land on Fly's own address — collapsing everyone into one bucket
+again. `TRUST_PROXY=true` is worse still: it takes the *leftmost* entry,
+which is exactly the part a client controls.
+
+**`CLIENT_IP_HEADER=Fly-Client-IP`** is belt and braces on top. Fly's proxy
+overwrites this header on every request rather than appending to it, so it
+can't be seeded by the client, and with it set the hop count stops being
+load-bearing. It is only consulted when `TRUST_PROXY` is also set — a
+directly-exposed process must ignore it, since then nothing is overwriting
+it and it is just another attacker-supplied string.
+
+Behind a different proxy, set `TRUST_PROXY` to that deployment's hop count
+(or any value express's `trust proxy` accepts: `loopback`, an IP, a CIDR
+list) and point `CLIENT_IP_HEADER` at whatever header it overwrites, if
+any. The resolution logic and its tests live in `server/clientIp.js` and
+`tests/clientIp.test.js`.
 
 The server also shuts down gracefully on `SIGTERM`/`SIGINT`: it stops
 accepting connections, lets in-flight council runs finish, and hard-exits
