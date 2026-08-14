@@ -180,9 +180,11 @@ Consequences that follow directly from that shape:
 - **The fan-out is quota-expensive by design.** One user question here is N
   provider calls, N ≤ 28. A single chat turn can consume 28 units of free-tier
   budget spread across providers. Two apps doing this concurrently is 56.
-  The engine has no rate limiting, no dedupe, and no request coalescing of its
-  own — nothing in this repo throttles a user who sends ten questions in ten
-  seconds.
+  `/api/chat` is throttled per client IP (`RATE_LIMIT_MAX`, default 10 per
+  `RATE_LIMIT_WINDOW_MS`, default 60 s), which caps one client at ~280 upstream
+  calls a minute rather than an unbounded loop. There is still no dedupe and no
+  request coalescing, and the limiter is in-memory and per process, so it
+  resets on restart and does not hold across multiple instances.
 - **The blast radius of a revoked key is shared.** Revoking or exhausting one
   provider key degrades every app at once.
 - **Adding an app is free in code and not free in quota.** Pointing a fourth
@@ -197,8 +199,10 @@ exhausts all of them.
 
 ### What a 429 actually looks like to a caller
 
-There is no special-case handling for 429 anywhere in this repository. Trace
-it through `freellmapiClient.js`:
+There is no special-case handling for an *upstream* 429 anywhere in this
+repository. (`/api/chat` does return its own 429 when the per-IP limiter trips,
+but that is the app shedding load at the front door, not a reaction to a
+provider throttling us.) Trace it through `freellmapiClient.js`:
 
 ```js
 if (!res.ok) {
@@ -526,9 +530,11 @@ To be unambiguous about the boundaries:
   line in the entire server is the `app.listen` startup message. `latencyMs`
   is measured per agent and then discarded — it is never emitted, aggregated,
   or persisted. There is no `/metrics`, no tracing, no error reporting sink.
-- **No rate limiting, auth, quotas, or abuse protection on `/api/chat`.** It
-  is an open endpoint that spends shared free-tier quota. Anyone who can reach
-  the app can drain the pool for every app on the router.
+- **No auth or per-user quotas on `/api/chat`.** It is an unauthenticated
+  endpoint that spends shared free-tier quota. There is now a per-IP fixed
+  window limiter (§2) and a `MAX_MESSAGE_CHARS` body cap, which blunt the
+  trivial drain-it-in-a-loop case, but an attacker with many source addresses
+  can still deplete the pool for every app on the router.
 - **No SSE heartbeat.** During the fan-out the stream can be silent for the
   full 25 s. Intermediaries with short idle timeouts may cut it.
 - **No client-disconnect handling.** Nothing listens for `req.on('close')`;
@@ -863,9 +869,9 @@ no build step, no framework, no npm frontend dependency.
 - **The user is never told why an agent failed.** Red ✗ chips only. Diagnosis
   requires server-side inspection, and there is nothing to inspect: no logs,
   no metrics, no traces, no alerting.
-- **The engine has no request-level protection.** No auth, no rate limit, no
-  abuse controls, no client-disconnect cancellation on an endpoint that spends
-  a shared, exhaustible resource.
+- **Request-level protection is partial.** A per-IP rate limit and a message
+  size cap exist, but there is still no auth and no client-disconnect
+  cancellation on an endpoint that spends a shared, exhaustible resource.
 - **No CI.** `scoring.js`, `council.js`, and the rate limiter have unit tests
   (`npm test`), but nothing runs them automatically, and there is no
   end-to-end coverage of the HTTP/SSE layer.
