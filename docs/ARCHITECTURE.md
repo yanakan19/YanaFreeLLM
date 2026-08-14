@@ -199,39 +199,40 @@ exhausts all of them.
 
 ### What a 429 actually looks like to a caller
 
-There is no special-case handling for an *upstream* 429 anywhere in this
-repository. (`/api/chat` does return its own 429 when the per-IP limiter trips,
-but that is the app shedding load at the front door, not a reaction to a
-provider throttling us.) Trace it through `freellmapiClient.js`:
+An upstream 429 is *classified* but never *acted on*. (`/api/chat` also returns
+its own 429 when the per-IP limiter trips, but that is the app shedding load at
+the front door, not a reaction to a provider throttling us.) Trace it through
+`freellmapiClient.js`: a non-2xx response is thrown with a code attached by
+`classifyHttpStatus`, which maps 429 — and 402, the other way a free tier says
+"you are done" — to `RATE_LIMITED`.
 
-```js
-if (!res.ok) {
-  const body = await res.text().catch(() => '');
-  throw new Error(`HTTP ${res.status}: ${body.slice(0, 300)}`);
-}
-```
-
-That `throw` is caught by the same function's own `catch`, which converts it
+That throw is caught by the same function's own `catch`, which converts it
 into a value, never a rejection:
 
 ```js
-return { ok: false, model, error: String(err?.message ?? err), latencyMs };
+return { ok: false, model, error, errorCode, retryable: isRetryable(errorCode), … };
 ```
 
 So a provider cap hit mid-request produces, for that one agent:
 
 - `ok: false`
+- `errorCode: 'rate_limited'`, `retryable: true`, `httpStatus: 429`
 - `error: "HTTP 429: <first 300 chars of the router's body>"`
 - a real `latencyMs` (the failure is measured like a success)
 
 and then, in `council.js`, an SSE frame
-`{ type: 'agent', agentNumber: 7, ok: false, message: 'Agent 7 could not respond.' }`,
-which the browser renders as a red `Agent 7 ✗` chip. The user is told an agent
-failed; they are **not** told why. The error string is retained on the
-`answers` array inside `runCouncil` but only ever leaves the server in the
-total-failure path (`{ ok:false, error:'no_agents_responded', answers }`) —
-on a partial failure the per-agent error strings are computed and then
-discarded, never sent to the client.
+`{ type: 'agent', agentNumber: 7, ok: false, errorCode: 'rate_limited', message: 'Agent 7 could not respond.' }`,
+which the browser renders as a red `Agent 7 ✗` chip. `runCouncil` also
+aggregates a `failureCounts` map keyed by code, so a caller can tell "the
+router is down" (28 × `network_error`) from "one flaky model" (1 ×
+`rate_limited`). The human-readable `error` *string* is still only returned in
+the total-failure path (`{ ok:false, error:'no_agents_responded', answers,
+failureCounts }`); on a partial failure the per-agent message is computed and
+discarded, so the user sees which agent failed and, via the code, roughly what
+class of failure it was — but never the router's actual message.
+
+Note `retryable` is *reported* and never consumed: nothing in this repo reads
+it back.
 
 There is **no retry, no backoff, no failover to a sibling model, and no
 circuit breaker in this repo.** If `gemini-2.5-flash` 429s, that agent is
