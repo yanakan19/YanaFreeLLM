@@ -99,6 +99,49 @@ worked example of steps 1-3 above, if you want to see it applied.
    ```
    Open http://localhost:4000
 
+## API
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/health` | `{ ok, agentCount, configured }` — `ok` is true only when the router env vars are set *and* at least one agent model is configured. |
+| `GET /api/config` | `{ agentCount, configured, maxMessageChars }` for the UI. |
+| `POST /api/chat` | `{ "message": "…" }` → a `text/event-stream` of `status` / `agent` / `result` / `error` events. |
+
+`POST /api/chat` fails fast with a JSON error body rather than a 500 or a
+hang:
+
+| Status | `error` | When |
+| --- | --- | --- |
+| 400 | `invalid_json` | body isn't valid JSON |
+| 400 | `invalid_body` | body isn't a JSON object |
+| 400 | `invalid_message` | `message` missing or not a string |
+| 400 | `empty_message` | `message` is blank/whitespace |
+| 413 | `message_too_long` | over `MAX_MESSAGE_CHARS` (default 4000) |
+| 413 | `body_too_large` | over `JSON_BODY_LIMIT` (default 64kb) |
+| 429 | `rate_limited` | over `RATE_LIMIT_MAX` runs per `RATE_LIMIT_WINDOW_MS` per IP (default 10/min) — response carries `Retry-After` |
+| 503 | `not_configured` / `no_agents_configured` | router env vars missing, or `agents.json` empty |
+
+The rate limiter (`server/rateLimit.js`) is a deliberately tiny in-memory
+fixed-window counter: it exists to stop one client looping a question into
+28 upstream free-tier calls, not to be a production edge limiter. It is
+per-process and resets on restart — if you ever run more than one instance,
+put a real limiter in front of it. If the app runs behind a proxy, set
+`app.set('trust proxy', …)` so `req.ip` is the real client IP.
+
+## Tests
+
+```bash
+npm test            # generate-agents self-test + vitest unit tests
+npm run test:unit
+npm run test:watch
+```
+
+Unit tests live in `tests/` and cover `server/scoring.js` (every criterion
+scorer plus `scoreAndRank`'s ranking), `server/council.js` (`runCouncil`
+with a mocked FreeLLMAPI client: fan-out, partial failure, total failure,
+SSE event ordering), `server/rateLimit.js`, and `/api/chat`'s request
+validation. They never touch the network.
+
 ## Remote deployment
 
 See `deploy/fly/` for Fly.io configs (no VCN/networking setup required,

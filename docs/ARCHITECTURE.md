@@ -534,7 +534,9 @@ To be unambiguous about the boundaries:
 - **No client-disconnect handling.** Nothing listens for `req.on('close')`;
   aborting the browser tab does not cancel the in-flight provider calls. The
   quota is spent regardless.
-- **No tests.** There is no test directory, runner, or CI configuration.
+- **No CI.** There is no CI configuration. Unit tests do now exist
+  (`tests/`, run by `vitest` via `npm test`, alongside the generator's
+  `--self-test` fixtures), but nothing runs them automatically on push.
 
 `/api/health` returns `{ ok, agentCount, configured }` where `configured` is
 merely "both env vars are non-empty". It never contacts the router, so it
@@ -802,9 +804,29 @@ Design notes for anyone implementing it for real:
 caching, so editing the file takes effect on the next request with no restart,
 at the cost of a file read and JSON parse per call. The array is hard-capped
 by `.slice(0, 28)` in `index.js`; extra entries are silently ignored. The
-shipped file lists only 4 example ids and a `_comment` telling you to check
-`GET /v1/models` on your own router. Fewer than 28 is fine — nothing depends on
+shipped file lists only 3 placeholder ids and a `_comment` telling you to
+replace them. Fewer than 28 is fine — nothing depends on
 the count except the "Consulting our N agents…" message.
+
+The file can be written by hand, but the supported path is
+`npm run generate-agents` (`scripts/generate-agents.mjs`). It reads
+`FREELLMAPI_BASE_URL` / `FREELLMAPI_API_KEY` from the environment, calls
+`GET {baseUrl}/v1/models` on your own router with a 20 s timeout, and selects a
+panel. Selection groups the catalog by provider (`owned_by`, falling back to the
+id's namespace prefix when the router does not label it) and round-robins so
+every provider contributes one model before any provider contributes a second;
+within a provider it alternates largest/smallest context window so a partial
+take still spans the range. Unavailable models and the `auto`/`fusion`
+pseudo-models are excluded — the latter deliberately, for the same reason
+`freellmapiClient.js` pins concrete catalog ids (§2). The cap is `--max=N`
+(or `MAX_AGENTS`), default 28, matching `index.js`'s `.slice(0, 28)`.
+
+The script is fail-closed: missing env, an unreachable or non-2xx router, an
+unparseable payload, or zero usable models all print an error, leave
+`agents.json` untouched, and exit 1. `--dry-run` prints the plan without
+writing. Note that a generated file's `_comment` is replaced with a generation
+timestamp and provider count, so it no longer carries the "check `/v1/models`
+yourself" instruction the shipped file has.
 
 `public/` is three unbundled static files served by `express.static`. There is
 no build step, no framework, no npm frontend dependency.
@@ -844,8 +866,9 @@ no build step, no framework, no npm frontend dependency.
 - **The engine has no request-level protection.** No auth, no rate limit, no
   abuse controls, no client-disconnect cancellation on an endpoint that spends
   a shared, exhaustible resource.
-- **No tests and no CI.** Behavioural changes to scoring or fan-out are
-  verified by hand.
+- **No CI.** `scoring.js`, `council.js`, and the rate limiter have unit tests
+  (`npm test`), but nothing runs them automatically, and there is no
+  end-to-end coverage of the HTTP/SSE layer.
 - **This is an engine, not a product.** It needs a domain layered on top —
   system prompt, retrieval, and usually a domain criterion — before it is
   useful to an end user. `Virtual Yanny` and `ScholApply` are the worked

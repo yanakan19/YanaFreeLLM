@@ -1,9 +1,8 @@
 {
-  "_comment": "Model ids your FreeLLMAPI router serves. Check GET {FREELLMAPI_BASE_URL}/v1/models on YOUR running instance (with your unified key in the Authorization header) and replace these. Up to 28 entries; fewer is fine.",
+  "_comment": "Placeholder examples — replace them. Run `npm run generate-agents` to build this file from GET {FREELLMAPI_BASE_URL}/v1/models on YOUR running instance, or check that endpoint by hand (with your unified key in the Authorization header). Up to 28 entries; fewer is fine. See docs/PROVIDER_COVERAGE.md before adding providers — Cohere in particular is flagged there as a terms-of-service risk for personal use, so no Cohere id is seeded here.",
   "models": [
     "gemini-2.5-flash",
     "llama-3.3-70b",
-    "mistral-large-latest",
-    "command-r-plus"
+    "mistral-large-latest"
   ]
 }
