@@ -135,6 +135,49 @@ describe('runCouncil — total failure', () => {
   });
 });
 
+describe('runCouncil — failure classification', () => {
+  it('tallies failures by errorCode', async () => {
+    respondWith({
+      m1: { ok: false, error: 'timed out', errorCode: 'timeout' },
+      m2: { ok: false, error: 'HTTP 429', errorCode: 'rate_limited' },
+      m3: good('a real answer here'),
+    });
+    const result = await runCouncil({ question: 'q', config });
+    expect(result.failureCounts).toEqual({ timeout: 1, rate_limited: 1 });
+  });
+
+  it('reports failureCounts on a total failure too', async () => {
+    respondWith({
+      m1: { ok: false, error: 'x', errorCode: 'auth_failure' },
+      m2: { ok: false, error: 'x', errorCode: 'auth_failure' },
+      m3: { ok: false, error: 'x', errorCode: 'auth_failure' },
+    });
+    const result = await runCouncil({ question: 'q', config });
+    expect(result.ok).toBe(false);
+    expect(result.failureCounts).toEqual({ auth_failure: 3 });
+  });
+
+  it('buckets unclassified failures as unknown', async () => {
+    respondWith({ m1: bad('legacy string only'), m2: good('a a a'), m3: good('b b b') });
+    const result = await runCouncil({ question: 'q', config });
+    expect(result.failureCounts).toEqual({ unknown: 1 });
+  });
+
+  it('forwards errorCode on the agent event', async () => {
+    respondWith({
+      m1: { ok: false, error: 'timed out', errorCode: 'timeout' },
+      m2: good('a a a'),
+      m3: good('b b b'),
+    });
+    const events = [];
+    await runCouncil({ question: 'q', config, onEvent: (e) => events.push(e) });
+    const failed = events.find((e) => e.type === 'agent' && !e.ok);
+    expect(failed.errorCode).toBe('timeout');
+    const okEvent = events.find((e) => e.type === 'agent' && e.ok);
+    expect(okEvent).not.toHaveProperty('errorCode');
+  });
+});
+
 describe('runCouncil — event emission', () => {
   it('emits status, then one agent event per model, then the ranking statuses in order', async () => {
     respondWith({ m1: good('a a a'), m2: good('b b b'), m3: good('c c c') });

@@ -109,6 +109,20 @@ Add in this order — easiest and highest value first:
 3. **GitHub Models** — you almost certainly already have the account. Small
    daily cap but the best models in the free pool; put it at the *top* of the
    fallback chain, not the middle.
+
+   > **Router advice, not council advice.** "Top of the fallback chain" is
+   > about how your FreeLLMAPI router picks a provider when something is asked
+   > of it generically. This app does not have a fallback chain: `council.js`
+   > fans every question out to *every* id in `server/config/agents.json` in
+   > parallel, so a model in that panel is called on every single turn. A
+   > 50 req/day provider placed in the panel is therefore exhausted after
+   > ~50 questions, and contributes one voice out of ~28 while it lasts.
+   > Keep low-daily-cap providers available to the router but **out of the
+   > council panel** — or accept that they are a per-day budget, not a
+   > per-question resource. `npm run generate-agents` does not know about
+   > rate limits; it balances the panel by provider and context window only,
+   > so it will happily include a 50/day provider. Review its output before
+   > relying on it.
 4. **Ollama Cloud** — frontier open-weight models, no card. Slow. Good for the
    "quality over latency" slot.
 5. **NavyAI (150K tok/day), LLM7 (100 req/hr), SEA-LION (10 RPM)** — documented,

@@ -35,6 +35,7 @@ export async function runCouncil({ question, config, systemPrompt, extraContext,
         emit('agent', {
           agentNumber,
           ok: result.ok,
+          ...(result.ok || !result.errorCode ? {} : { errorCode: result.errorCode }),
           message: result.ok ? `Agent ${agentNumber} has responded.` : `Agent ${agentNumber} could not respond.`,
         });
         return { agentNumber, ...result };
@@ -42,12 +43,23 @@ export async function runCouncil({ question, config, systemPrompt, extraContext,
     }),
   );
 
-  const answers = settled.map((s) => (s.status === 'fulfilled' ? s.value : { ok: false, error: String(s.reason) }));
+  const answers = settled.map((s) =>
+    s.status === 'fulfilled' ? s.value : { ok: false, error: String(s.reason), errorCode: 'unknown' },
+  );
   const successes = answers.filter((a) => a.ok);
+  const failures = answers.filter((a) => !a.ok);
+
+  // How many agents failed for each reason (timeout / auth_failure / …).
+  // Lets a caller distinguish "the router is down" from "one flaky model".
+  const failureCounts = {};
+  for (const f of failures) {
+    const code = f.errorCode ?? 'unknown';
+    failureCounts[code] = (failureCounts[code] ?? 0) + 1;
+  }
 
   if (successes.length === 0) {
     emit('status', { message: 'Every agent failed to respond — check your FreeLLMAPI router and keys.' });
-    return { ok: false, error: 'no_agents_responded', answers };
+    return { ok: false, error: 'no_agents_responded', answers, failureCounts };
   }
 
   emit('status', { message: 'Ranking responses anonymously…' });
@@ -63,6 +75,7 @@ export async function runCouncil({ question, config, systemPrompt, extraContext,
     matrix,
     agentCount: models.length,
     respondedCount: successes.length,
-    failedCount: answers.length - successes.length,
+    failedCount: failures.length,
+    failureCounts,
   };
 }

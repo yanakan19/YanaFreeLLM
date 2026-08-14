@@ -128,6 +128,29 @@ per-process and resets on restart — if you ever run more than one instance,
 put a real limiter in front of it. If the app runs behind a proxy, set
 `app.set('trust proxy', …)` so `req.ip` is the real client IP.
 
+### Agent failure codes
+
+`callAgentModel()` never throws. On failure it returns the original
+`{ ok: false, model, error, latencyMs }` shape plus a stable
+`errorCode` (from `ErrorCodes` in `server/freellmapiClient.js`), a
+`retryable` boolean and, when there was a response, `httpStatus`:
+
+| `errorCode` | Meaning | Retryable |
+| --- | --- | --- |
+| `timeout` | no answer within `AGENT_TIMEOUT_SECONDS` | yes |
+| `rate_limited` | 429/402 — free-tier quota hit | yes |
+| `upstream_error` | 5xx from the router or the provider behind it | yes |
+| `network_error` | router unreachable / connection dropped | yes |
+| `auth_failure` | 401/403 — unified key wrong or lacking access | no |
+| `bad_request` | 4xx we caused (unknown model id, bad payload) | no |
+| `malformed_response` | 2xx without a usable completion | no |
+| `empty_completion` | valid response, no text | no |
+| `unknown` | unclassified | no |
+
+`runCouncil()` forwards the code on each failing `agent` event and
+returns a `failureCounts` tally (e.g. `{ rate_limited: 4, timeout: 1 }`)
+so a caller can tell "the router is down" apart from "one flaky model".
+
 ## Tests
 
 ```bash
