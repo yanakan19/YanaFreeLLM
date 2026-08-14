@@ -71,6 +71,19 @@ function asyncRoute(handler) {
   };
 }
 
+// Liveness only: "this process is up and serving HTTP". It deliberately
+// checks nothing else, which is what makes it safe for a supervisor that
+// RESTARTS the container on failure (the Docker HEALTHCHECK) — restarting
+// cannot fix a down router or an empty agents.json, so those must not fail
+// this endpoint. Use /api/health for readiness/config instead.
+app.get('/api/live', (req, res) => {
+  res.json({ ok: true, uptimeSeconds: Math.round(process.uptime()) });
+});
+
+// Readiness/config check, NOT a health check: it reports whether the router
+// env vars are set and agents.json is non-empty. It never contacts the
+// router, so it stays `ok: true` while the router is down. Don't wire it to
+// anything that reacts automatically to a false — see docs/ARCHITECTURE.md.
 app.get(
   '/api/health',
   asyncRoute(async (req, res) => {
