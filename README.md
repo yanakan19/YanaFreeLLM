@@ -104,7 +104,7 @@ worked example of steps 1-3 above, if you want to see it applied.
 | Endpoint | Purpose |
 | --- | --- |
 | `GET /api/live` | Liveness: `{ ok: true, uptimeSeconds }` whenever the process is serving HTTP. Checks nothing else — this is what the Docker `HEALTHCHECK` probes. |
-| `GET /api/health` | Readiness/config: `{ ok, agentCount, configured }` — `ok` is true only when the router env vars are set *and* at least one agent model is configured. It never contacts the router, so it stays `ok: true` while the router is down. Don't wire it to anything that restarts the app on a false. |
+| `GET /api/health` | Readiness: `{ ok, configured, agentCount, routerReachable, routerCheckedAt, … }`. `ok` requires the env vars set, at least one agent model configured, *and* a real `GET /v1/models` probe of the router succeeding — it returns **503** when not ready. The probe is cached for `ROUTER_HEALTH_TTL_MS` (default 45s) and concurrent callers share one in-flight request, so polling costs at most one router call per TTL. Don't wire it to anything that restarts the app on a false: a down router is not fixed by a restart. Use `/api/live` for that. |
 | `GET /api/config` | `{ agentCount, configured, maxMessageChars }` for the UI. |
 | `POST /api/chat` | `{ "message": "…" }` → a `text/event-stream` of `status` / `agent` / `result` / `error` events. |
 

@@ -548,10 +548,22 @@ To be unambiguous about the boundaries:
   `.github/workflows/ci.yml` runs them on Node 20 and 22. Nothing exercises
   the HTTP/SSE layer, the fan-out against a live router, or the browser client.
 
-`/api/health` returns `{ ok, agentCount, configured }` where `configured` is
-merely "both env vars are non-empty". It never contacts the router, so it
-reports `ok: true` while the router is completely down. It is a config check,
-not a health check, and should not be wired to anything that reacts to it.
+Health checking is split in two, and the distinction matters.
+
+`/api/live` is liveness: `{ ok: true, uptimeSeconds }` whenever the process is
+serving HTTP, checking nothing else. This is what the Docker `HEALTHCHECK`
+probes, because Docker *restarts* an unhealthy container, and a restart cannot
+fix a down router or an empty `agents.json`. Probing readiness from there would
+restart-loop an otherwise healthy container that simply has no keys set yet.
+
+`/api/health` is readiness: it returns `configured`, `agentCount`, and a real
+`routerReachable` derived from a `GET /v1/models` probe of the router, with
+`ok` requiring all three, and a **503** when any of them fails. The probe is
+memoised for `ROUTER_HEALTH_TTL_MS` (default 45 s) and single-flighted, so a
+burst of polls costs at most one router request per TTL — and it is a
+`/v1/models` listing rather than a completion, so it does not spend model
+quota. It is still the wrong thing to wire to a restarter, for the reason
+above: it can fail for causes a restart will not cure.
 
 ---
 
@@ -633,12 +645,12 @@ be baked into the image, and the build context cannot overwrite the installed
 dependencies. The image runs as the unprivileged `node` user. `EXPOSE 4000`
 matches `internal_port`, and `CMD ["node", "server/index.js"]`.
 
-The image also declares a `HEALTHCHECK` against `/api/health`. Read the note at
-the end of §4 before trusting it: that endpoint only checks that the env vars
-are set and `agents.json` is non-empty, so it confirms the container is up and
-configured — it does **not** confirm the router is reachable. A container whose
-router is completely down still reports healthy, and Docker will not restart
-it.
+The image also declares a `HEALTHCHECK`, which probes `/api/live` — liveness
+only, deliberately not `/api/health`. See the end of §4 for why: Docker
+restarts what it judges unhealthy, so the probe must only fail for conditions a
+restart can actually fix. Router reachability and configuration are reported by
+`/api/health` instead, which is for a human or a readiness gate to read, not
+for a supervisor to react to.
 
 Wiring between the two apps is by public URL, not Fly private networking:
 `FREELLMAPI_BASE_URL=https://<router-app>.fly.dev` plus the unified
