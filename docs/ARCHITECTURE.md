@@ -540,9 +540,10 @@ To be unambiguous about the boundaries:
 - **No client-disconnect handling.** Nothing listens for `req.on('close')`;
   aborting the browser tab does not cancel the in-flight provider calls. The
   quota is spent regardless.
-- **No CI.** There is no CI configuration. Unit tests do now exist
-  (`tests/`, run by `vitest` via `npm test`, alongside the generator's
-  `--self-test` fixtures), but nothing runs them automatically on push.
+- **No end-to-end coverage.** Unit tests exist (`tests/`, run by `vitest` via
+  `npm test`, alongside the generator's `--self-test` fixtures) and
+  `.github/workflows/ci.yml` runs them on Node 20 and 22. Nothing exercises
+  the HTTP/SSE layer, the fan-out against a live router, or the browser client.
 
 `/api/health` returns `{ ok, agentCount, configured }` where `configured` is
 merely "both env vars are non-empty". It never contacts the router, so it
@@ -872,9 +873,10 @@ no build step, no framework, no npm frontend dependency.
 - **Request-level protection is partial.** A per-IP rate limit and a message
   size cap exist, but there is still no auth and no client-disconnect
   cancellation on an endpoint that spends a shared, exhaustible resource.
-- **No CI.** `scoring.js`, `council.js`, and the rate limiter have unit tests
-  (`npm test`), but nothing runs them automatically, and there is no
-  end-to-end coverage of the HTTP/SSE layer.
+- **Testing stops at the unit boundary.** `scoring.js`, `council.js`, the rate
+  limiter, and request validation have unit tests, run in CI on Node 20 and 22.
+  Nothing covers the HTTP/SSE layer or a real fan-out, so a regression in
+  streaming or in the router call itself would not be caught.
 - **This is an engine, not a product.** It needs a domain layered on top —
   system prompt, retrieval, and usually a domain criterion — before it is
   useful to an end user. `Virtual Yanny` and `ScholApply` are the worked
